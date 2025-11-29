@@ -1,26 +1,39 @@
-import numpy as np
-import tensorflow as tf
+import torch
+import torch.nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, random_split
+from torchvision import datasets, models, transforms
 
-tf.keras.applications.MobileNetV3Large(
-    input_shape=None,
-    alpha=1.0,
-    minimalistic=False,
-    include_top=True,
-    weights="imagenet",
-    input_tensor=None,
-    classes=1000,
-    pooling=None,
-    dropout_rate=0.2,
-    classifier_activation="softmax",
-    include_preprocessing=True,
-)
+DATA_DIR = "dataset/final/train"
+BATCH_SIZE = 32
+EPOCHS = 20
+IMG_SIZE = (224, 224)
+LEARNING_RATE = 0.001
+DEVICE = torch.device("cuda")
 
-trainDir = "dataset/final/train"
-train_dataset = tf.keras.utils.image_dataset_from_directory(
-    trainDir, shuffle=True, batch_size=32, image_size=(224, 224)
-)
 
-validationDir = "dataset/mobilenetv3/valid"
-validation_dataset = tf.keras.utils.image_dataset_from_directory(
-    validationDir, shuffle=True, batch_size=32
-)
+def main():
+    print("Using device: ", DEVICE)
+
+    data_transforms = {
+        "train": transforms.Compose(
+            [
+                transforms.Resize(IMG_SIZE),
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomRotation(10),
+                transforms.ToTensor(),
+                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+            ]
+        ),
+        "val": (
+            [
+                transforms.Resize(IMG_SIZE),
+                transforms.ToTensor(),
+                transforms.Normalize([0.485, 0.456, 0.406], [0.299, 0.224, 0.225]),
+            ]
+        ),
+    }
+
+
+if __name__ == "__main__":
+    main()
