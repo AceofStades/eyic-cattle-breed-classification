@@ -6,11 +6,12 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
-from torchvision import datasets, transforms
-from torchvision.models import MobileNet_V3_Large_Weights, mobilenet_v3_large
+from torchvision import datasets, models, transforms
+from torchvision.models import MobileNet_V3_Large_Weights
 
-TRAIN_DIR = "dataset/final/train"
-VAL_DIR = "dataset/final/valid"
+# --- CONFIGURATION ---
+TRAIN_DIR = "dataset/final-new/train"
+VAL_DIR = "dataset/final-new/valid"
 
 BATCH_SIZE = 128
 IMG_SIZE = (224, 224)
@@ -63,6 +64,7 @@ def train_model(
 
             print(f"{phase} Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f}")
 
+            # Save best model
             if phase == "val" and epoch_acc > best_acc:
                 best_acc = epoch_acc
                 best_model_wts = copy.deepcopy(model.state_dict())
@@ -76,16 +78,19 @@ def train_model(
 def main():
     print(f"Using device: {DEVICE}")
 
+    # --- STRONG AUGMENTATION ---
     data_transforms = {
         "train": transforms.Compose(
             [
-                transforms.RandomResizedCrop(IMG_SIZE, scale=(0.8, 1.0)),
+                transforms.RandomResizedCrop(IMG_SIZE, scale=(0.7, 1.0)),
                 transforms.RandomHorizontalFlip(),
-                transforms.RandomRotation(15),
-                transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+                transforms.RandomRotation(20),  # Increased rotation slightly
+                transforms.ColorJitter(
+                    brightness=0.3, contrast=0.3, saturation=0.3
+                ),  # Increased jitter
                 transforms.ToTensor(),
                 transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-                transforms.RandomErasing(p=0.1),
+                transforms.RandomErasing(p=0.2, scale=(0.02, 0.15)),
             ]
         ),
         "val": transforms.Compose(
@@ -129,36 +134,41 @@ def main():
 
     print("Loading MobileNetV3-Large...")
     weights = MobileNet_V3_Large_Weights.DEFAULT
-    model = mobilenet_v3_large(weights=weights)
+    model = models.mobilenet_v3_large(weights=weights)
 
     for param in model.parameters():
         param.requires_grad = False
 
+    # FIX 2: Increased Dropout to 0.5 (Strong Regularization)
     num_ftrs = model.classifier[-1].in_features
     model.classifier[-1] = nn.Sequential(
-        nn.Dropout(p=0.3), nn.Linear(num_ftrs, num_classes)
+        nn.Dropout(p=0.5), nn.Linear(num_ftrs, num_classes)
     )
 
     model = model.to(DEVICE)
-    criterion = nn.CrossEntropyLoss()
+
+    # FIX 1: Label Smoothing (Prevents model from being "too confident")
+    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
 
     print("\n--- STAGE 1: WARM UP (Head Only) ---")
-    optimizer_head = optim.SGD(
-        model.classifier.parameters(), lr=0.01, momentum=0.9, weight_decay=1e-4
+    # FIX 3: Added Weight Decay (L2 Regularization)
+    optimizer_head = optim.Adam(
+        model.classifier.parameters(), lr=0.001, weight_decay=1e-4
     )
     model = train_model(model, dataloaders, criterion, optimizer_head, num_epochs=10)
 
-    print("\n--- STAGE 2: DEEP FINE TUNING ---")
+    print("\n--- STAGE 2: FINE TUNING (Backbone Unfrozen) ---")
 
-    for param in model.features[-10:].parameters():
+    # Unfreeze the last 6 blocks
+    for param in model.features[-6:].parameters():
         param.requires_grad = True
 
-    optimizer_fine = optim.SGD(
+    # Weight decay added here too
+    optimizer_fine = optim.Adam(
         [
-            {"params": model.features[-10:].parameters(), "lr": 1e-4},
+            {"params": model.features[-6:].parameters(), "lr": 1e-4},
             {"params": model.classifier.parameters(), "lr": 1e-3},
         ],
-        momentum=0.9,
         weight_decay=1e-4,
     )
 
@@ -182,7 +192,7 @@ def main():
     example_input = torch.rand(1, 3, 224, 224).to(DEVICE)
     traced_script_module = torch.jit.trace(model, example_input)
     traced_script_module.save("breed_classifier_mobile.pt")
-    print("Mobile-ready model saved.")
+    print("Mobile-ready model saved to breed_classifier_mobile.pt")
 
 
 if __name__ == "__main__":
