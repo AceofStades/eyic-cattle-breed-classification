@@ -211,3 +211,4 @@ old-dataset/
 *.pt
 *.png
 dataset/
+training_log.txt
