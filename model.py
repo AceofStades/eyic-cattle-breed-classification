@@ -18,7 +18,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 # --- CONFIGURATION ---
 CONFIG = {
-    "DATA_DIR": "dataset/Indian_bovine_breeds",
+    "DATA_DIR": "dataset/Indian_bovine_breeds_balanced",
     "BATCH_SIZE": 64,  # 64 is safe for 16GB VRAM with Unfrozen MobileNet
     "WARMUP_EPOCHS": 5,
     "MAIN_EPOCHS": 45,
