@@ -16,7 +16,6 @@ from torchvision.models import MobileNet_V3_Large_Weights
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
-# --- CONFIGURATION ---
 CONFIG = {
     "DATA_DIR": "dataset/Indian_bovine_breeds_balanced",
     "BATCH_SIZE": 64,  # 64 is safe for 16GB VRAM with Unfrozen MobileNet
@@ -95,10 +94,8 @@ def get_dataloaders(data_dir, train_tf, val_tf):
     val_ds = Subset(full_val_dataset, val_idx)
     test_ds = Subset(full_val_dataset, test_idx)
 
-    # 3. Create WeightedRandomSampler for Class Imbalance
     print("Calculating class weights for Sampler...")
 
-    # Get the targets for ONLY the training indices
     train_targets = np.array(targets)[train_idx]
     class_counts = Counter(train_targets)
 
@@ -117,7 +114,6 @@ def get_dataloaders(data_dir, train_tf, val_tf):
     print(f"Stats: {len(train_ds)} Train | {len(val_ds)} Val | {len(test_ds)} Test")
 
     # 4. Create Loaders
-    # NOTE: shuffle=False is MANDATORY when using a sampler
     dataloaders = {
         "train": DataLoader(
             train_ds,
@@ -217,7 +213,7 @@ def train_loop(
 
             if phase == "val":
                 if scheduler:
-                    scheduler.step(epoch_loss)  # ReduceLROnPlateau step
+                    scheduler.step(epoch_loss)
 
                 if epoch_acc > best_acc:
                     best_acc = epoch_acc
@@ -256,7 +252,6 @@ def main():
     dataloaders, num_classes = get_dataloaders(CONFIG["DATA_DIR"], train_tf, val_tf)
     model = build_model(num_classes)
 
-    # Use Label Smoothing
     criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
 
     # --- PHASE 1: WARMUP (Head Only) ---
@@ -291,9 +286,8 @@ def main():
             {"params": model.classifier.parameters(), "lr": 5e-4},
         ],
         weight_decay=0.02,
-    )  # Higher decay to prevent overfitting on rare classes
+    )
 
-    # Scheduler for fine-tuning
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer_main, mode="min", factor=0.5, patience=3
     )
@@ -308,7 +302,6 @@ def main():
         phase_name="Main",
     )
 
-    # Save Final Model
     save_model(model)
 
 
