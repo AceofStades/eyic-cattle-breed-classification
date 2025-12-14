@@ -207,4 +207,7 @@ elif page == "Model Evaluation":
             is_summary = s.name in ["accuracy", "macro avg", "weighted avg"]
             return ["background-color: #262730" if is_summary else "" for _ in s]
 
-        st.dataframe(report_df.style.apply(highlight_summary, axis=1).format("{:.2f}"))
+        st.dataframe(
+            report_df.style.apply(highlight_summary, axis=1).format("{:.2f}"),
+            height="content",
+        )
