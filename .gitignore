@@ -209,6 +209,5 @@ __marimo__/
 old-dataset/
 *.pth
 *.pt
-*.png
 dataset/
 training_log.txt
