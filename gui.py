@@ -109,7 +109,9 @@ elif page == "Live Classification":
 
             with col1:
                 image = Image.open(uploaded_file).convert("RGB")
-                st.image(image, caption="Uploaded Image", width=True)
+                # FIX: use_container_width=True ensures image fits column.
+                # Do NOT use width=True (that sets width to 1 pixel).
+                st.image(image, caption="Uploaded Image", use_container_width=True)
 
             with col2:
                 st.write("### Analysis")
@@ -204,9 +206,5 @@ elif page == "Model Evaluation":
         def highlight_summary(s):
             is_summary = s.name in ["accuracy", "macro avg", "weighted avg"]
             return ["background-color: #262730" if is_summary else "" for _ in s]
-            # return ["background-color: #1f423f" if is_summary else "" for _ in s]
 
-        st.dataframe(
-            report_df.style.apply(highlight_summary, axis=1).format("{:.2f}"),
-            height="content",
-        )
+        st.dataframe(report_df.style.apply(highlight_summary, axis=1).format("{:.2f}"))
