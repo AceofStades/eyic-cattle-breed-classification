@@ -15,7 +15,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-
 def run_experiment(
     backbone="mobile",
     output_dir="experiments",
@@ -32,12 +31,11 @@ def run_experiment(
     out_path = Path(output_dir) / exp_name
     out_path.mkdir(parents=True, exist_ok=True)
 
-    # Update CONFIG
     CONFIG["BATCH_SIZE"] = batch_size
     CONFIG["WARMUP_EPOCHS"] = warmup_epochs
     CONFIG["MAIN_EPOCHS"] = main_epochs
 
-    print(f"Running experiment: {exp_name}")
+    print(f"startin exp: {exp_name}")
 
     train_tf, val_tf = get_transforms(CONFIG["IMG_SIZE"][0], use_alb=use_alb)
     dataloaders, num_classes = get_dataloaders(CONFIG["DATA_DIR"], train_tf, val_tf)
@@ -45,12 +43,11 @@ def run_experiment(
     try:
         model = build_model(num_classes, backbone=backbone)
     except Exception as e:
-        print(f"Failed to build model {backbone}: {e}")
+        print(f"fked up{backbone}: {e}")
         return {"error": str(e)}
 
     criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
 
-    # Warmup
     head_params = [p for n, p in model.named_parameters() if "classifier" in n or "head" in n or "linear" in n]
     if len(head_params) == 0:
         head_params = model.parameters()
@@ -68,11 +65,9 @@ def run_experiment(
         mixup_alpha=0.0,
     )
 
-    # Unfreeze
     for param in model.parameters():
         param.requires_grad = True
 
-    # Optimizer
     body_params = [p for n, p in model.named_parameters() if not ("classifier" in n or "head" in n or "linear" in n)]
     head_params = [p for n, p in model.named_parameters() if ("classifier" in n or "head" in n or "linear" in n)]
 
@@ -105,7 +100,6 @@ def run_experiment(
         mixup_alpha=mixup,
     )
 
-    # Save model and summary
     model_name = f"breed_classifier_{backbone}"
     save_model(model, name=str(out_path / model_name))
 
@@ -121,19 +115,17 @@ def run_experiment(
         "model_path": str(out_path / f"{model_name}.pth"),
     }
 
-    # Save summary
     with open(out_path / "summary.json", "w") as f:
         json.dump(summary, f, indent=2)
 
-    print(f"Experiment {exp_name} complete. Artifacts saved to {out_path}")
+    print(f"exp {exp_name} fk. see{out_path}")
     return summary
-
 
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Run experiments for breed classifier")
-    parser.add_argument("--backbones", nargs="+", default=["mobile", "efficientnet_b3"], help="Backbones to run")
+    parser = argparse.ArgumentParser(description="tung tung sahur")
+    parser.add_argument("--backbones", nargs="+", default=["mobile", "efficientnet_b3"])
     parser.add_argument("--use-amp", action="store_true")
     parser.add_argument("--use-alb", action="store_true")
     parser.add_argument("--mixup", type=float, default=0.2)
@@ -158,4 +150,4 @@ if __name__ == "__main__":
         )
         results.append(res)
 
-    print("All experiments finished.")
+    print("bombastic")

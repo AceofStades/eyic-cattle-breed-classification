@@ -1,0 +1,11 @@
+{
+  "exp_name": "exp_mobile_1766733609",
+  "backbone": "mobile",
+  "use_amp": true,
+  "use_alb": true,
+  "mixup": 0.2,
+  "warmup_epochs": 1,
+  "main_epochs": 20,
+  "batch_size": 32,
+  "model_path": "experiments/exp_mobile_1766733609/breed_classifier_mobile.pth"
+}
