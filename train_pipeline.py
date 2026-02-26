@@ -37,11 +37,14 @@ LABEL_MAP_PATH = SCRIPT_DIR / "breed_labels.json"
 BEST_MODEL_PATH = SCRIPT_DIR / "best_breed_classifier.pth"
 LAST_CKPT_PATH = SCRIPT_DIR / "last_checkpoint.pth"
 ONNX_MODEL_PATH = SCRIPT_DIR / "breed_classifier.onnx"
+TORCHSCRIPT_MODEL_PATH = SCRIPT_DIR / "breed_classifier.ptl"
 
-IMG_SIZE = 224
-BATCH_SIZE = 32
+MODEL_NAME = "efficientnet_b2"
+IMG_SIZE = 260
+RESIZE_SIZE = 292
+BATCH_SIZE = 64
 FREEZE_EPOCHS = 5
-FINETUNE_EPOCHS = 30
+FINETUNE_EPOCHS = 50
 EPOCHS = FREEZE_EPOCHS + FINETUNE_EPOCHS
 FREEZE_LR = 3e-3
 FINETUNE_LR = 1e-4
@@ -52,13 +55,53 @@ MIXUP_ALPHA = 0.3
 CUTMIX_ALPHA = 1.0
 MIXUP_PROB = 0.5
 GRAD_CLIP = 1.0
-EARLY_STOP_PATIENCE = 10
+EARLY_STOP_PATIENCE = 15
 NUM_WORKERS = 4
 AUGMENT_COPIES = 10
+HARD_NEG_EXTRA_COPIES = 5
 VAL_SIZE = 0.2
 RANDOM_SEED = 42
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+if torch.cuda.is_available():
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    torch.backends.cudnn.benchmark = True
+SCALER = torch.amp.GradScaler("cuda", enabled=torch.cuda.is_available())
+
+HARD_NEGATIVE_PAIRS = [
+    ("Red_Sindhi", "Sahiwal"),
+    ("Hariana", "Tharparkar"),
+    ("Mehsana", "Murrah"),
+    ("Gir", "Sahiwal"),
+    ("Bhadawari", "Toda"),
+    ("Murrah", "Nagpuri"),
+    ("Banni", "Murrah"),
+    ("Nimari", "Rathi"),
+    ("Nili_Ravi", "Murrah"),
+    ("Amritmahal", "Khillari"),
+    ("Hallikar", "Khillari"),
+    ("Jersey", "Holstein_Friesian"),
+    ("Red_Dane", "Jersey"),
+    ("Ayrshire", "Holstein_Friesian"),
+    ("Kasargod", "Malnad_gidda"),
+    ("Deoni", "Ongole"),
+    ("Kenkatha", "Kherigarh"),
+    ("Kenkatha", "Hariana"),
+    ("Kangayam", "Pulikulam"),
+    ("Pulikulam", "Umblachery"),
+    ("Kasargod", "Vechur"),
+    ("Malnad_gidda", "Vechur"),
+    ("Gir", "Red_Sindhi"),
+    ("Krishna_Valley", "Hallikar"),
+    ("Nagori", "Kenkatha"),
+    ("Surti", "Mehsana"),
+]
+
+HARD_NEGATIVE_BREEDS = set()
+for a, b in HARD_NEGATIVE_PAIRS:
+    HARD_NEGATIVE_BREEDS.add(a)
+    HARD_NEGATIVE_BREEDS.add(b)
 
 
 def load_metadata():
@@ -117,7 +160,7 @@ def get_train_transform():
 
 def get_val_transform():
     return A.Compose([
-        A.Resize(256, 256),
+        A.Resize(RESIZE_SIZE, RESIZE_SIZE),
         A.CenterCrop(IMG_SIZE, IMG_SIZE),
         A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ToTensorV2(),
@@ -164,7 +207,11 @@ def generate_augmented_dataset(train_df, force=False):
             "label": label,
         })
 
-        for i in range(AUGMENT_COPIES):
+        n_copies = AUGMENT_COPIES
+        if breed in HARD_NEGATIVE_BREEDS:
+            n_copies = AUGMENT_COPIES + HARD_NEG_EXTRA_COPIES
+
+        for i in range(n_copies):
             augmented = aug_transform(image=img)
             aug_img = augmented["image"]
             aug_filename = f"{original_stem}_aug{i}{original_ext}"
@@ -237,7 +284,7 @@ class BreedDataset(Dataset):
 
 
 def build_model(num_classes):
-    model = timm.create_model("efficientnet_b0", pretrained=True, num_classes=num_classes, drop_rate=DROPOUT_RATE)
+    model = timm.create_model(MODEL_NAME, pretrained=True, num_classes=num_classes, drop_rate=DROPOUT_RATE)
     model = model.to(DEVICE)
     return model
 
@@ -304,22 +351,24 @@ def train_one_epoch(model, dataloader, criterion, optimizer, use_mixup=True):
         images = images.to(DEVICE)
         labels = labels.to(DEVICE)
 
-        if use_mixup and np.random.rand() < MIXUP_PROB:
-            if np.random.rand() < 0.5:
-                images, y_a, y_b, lam = mixup_data(images, labels, MIXUP_ALPHA)
+        optimizer.zero_grad()
+        with torch.amp.autocast("cuda", enabled=torch.cuda.is_available()):
+            if use_mixup and np.random.rand() < MIXUP_PROB:
+                if np.random.rand() < 0.5:
+                    images, y_a, y_b, lam = mixup_data(images, labels, MIXUP_ALPHA)
+                else:
+                    images, y_a, y_b, lam = cutmix_data(images, labels, CUTMIX_ALPHA)
+                outputs = model(images)
+                loss = mixup_criterion(criterion, outputs, y_a, y_b, lam)
             else:
-                images, y_a, y_b, lam = cutmix_data(images, labels, CUTMIX_ALPHA)
-            optimizer.zero_grad()
-            outputs = model(images)
-            loss = mixup_criterion(criterion, outputs, y_a, y_b, lam)
-        else:
-            optimizer.zero_grad()
-            outputs = model(images)
-            loss = criterion(outputs, labels)
+                outputs = model(images)
+                loss = criterion(outputs, labels)
 
-        loss.backward()
+        SCALER.scale(loss).backward()
+        SCALER.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
-        optimizer.step()
+        SCALER.step(optimizer)
+        SCALER.update()
 
         running_loss += loss.item() * images.size(0)
         _, predicted = outputs.max(1)
@@ -342,8 +391,9 @@ def validate(model, dataloader, criterion):
             images = images.to(DEVICE)
             labels = labels.to(DEVICE)
 
-            outputs = model(images)
-            loss = criterion(outputs, labels)
+            with torch.amp.autocast("cuda", enabled=torch.cuda.is_available()):
+                outputs = model(images)
+                loss = criterion(outputs, labels)
 
             running_loss += loss.item() * images.size(0)
             _, predicted = outputs.max(1)
@@ -489,6 +539,130 @@ def train_model(model, train_loader, val_loader, num_classes, resume_ckpt=None):
     return model
 
 
+HARD_NEG_EPOCHS = 10
+HARD_NEG_LR = 1e-5
+HARD_NEG_WEIGHT = 1.5
+
+
+def train_hard_negatives(model, aug_df, val_loader, num_classes, label_map, hard_neg_epochs=None):
+    if hard_neg_epochs is None:
+        hard_neg_epochs = HARD_NEG_EPOCHS
+
+    print(f"\n--- phase 3: hard-negative mining ({hard_neg_epochs} ep) ---")
+
+    if BEST_MODEL_PATH.exists():
+        ckpt = torch.load(BEST_MODEL_PATH, map_location=DEVICE, weights_only=True)
+        model.load_state_dict(ckpt["model_state_dict"])
+        best_val_acc = ckpt.get("best_val_acc", ckpt.get("val_acc", 0.0))
+        print(f"  loaded best ckpt | val acc {best_val_acc:.4f}")
+    else:
+        best_val_acc = 0.0
+
+    name_to_idx = {v: int(k) for k, v in label_map.items()}
+    hard_breed_indices = set()
+    for a, b in HARD_NEGATIVE_PAIRS:
+        if a in name_to_idx:
+            hard_breed_indices.add(name_to_idx[a])
+        if b in name_to_idx:
+            hard_breed_indices.add(name_to_idx[b])
+
+    class_weights = torch.ones(num_classes, device=DEVICE)
+    for idx in hard_breed_indices:
+        class_weights[idx] = HARD_NEG_WEIGHT
+    print(f"  {len(hard_breed_indices)} hard-neg breeds weighted {HARD_NEG_WEIGHT}x | {num_classes - len(hard_breed_indices)} normal")
+
+    from torch.utils.data import WeightedRandomSampler
+    sample_weights = []
+    for _, row in aug_df.iterrows():
+        lbl = int(row["label"])
+        sample_weights.append(HARD_NEG_WEIGHT if lbl in hard_breed_indices else 1.0)
+    sampler = WeightedRandomSampler(sample_weights, num_samples=len(aug_df), replacement=True)
+
+    hn_dataset = AugmentedBreedDataset(aug_df, AUG_DIR, transform=get_train_transform())
+    hn_loader = DataLoader(
+        hn_dataset,
+        batch_size=BATCH_SIZE,
+        sampler=sampler,
+        num_workers=NUM_WORKERS,
+        pin_memory=True,
+        drop_last=True,
+    )
+    print(f"  full aug ds {len(aug_df)} samples | weighted sampler active")
+
+    for name, param in model.named_parameters():
+        param.requires_grad = False
+    for name, param in model.named_parameters():
+        if any(k in name for k in ["blocks.5", "blocks.6", "conv_head", "bn2", "classifier"]):
+            param.requires_grad = True
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total = sum(p.numel() for p in model.parameters())
+    print(f"  trainable {trainable}/{total} params ({trainable*100//total}%)")
+
+    optimizer = optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=HARD_NEG_LR, weight_decay=WEIGHT_DECAY)
+    criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=0.15)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=hard_neg_epochs)
+
+    patience_counter = 0
+    for epoch in range(1, hard_neg_epochs + 1):
+        print(f"\nep {epoch}/{hard_neg_epochs} [hard-neg] | lr {optimizer.param_groups[0]['lr']:.6f}")
+
+        train_loss, train_acc = train_one_epoch(model, hn_loader, criterion, optimizer, use_mixup=True)
+        val_loss, val_acc = validate(model, val_loader, nn.CrossEntropyLoss(label_smoothing=0.15))
+        scheduler.step()
+
+        print(f"  hn trn loss {train_loss:.4f} acc {train_acc:.4f}")
+        print(f"  full val loss {val_loss:.4f} acc {val_acc:.4f}")
+
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            patience_counter = 0
+            torch.save({
+                "epoch": epoch,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "val_acc": val_acc,
+                "best_val_acc": best_val_acc,
+                "phase": "hard_neg",
+                "num_classes": num_classes,
+            }, BEST_MODEL_PATH)
+            print(f"  best saved | val acc {best_val_acc:.4f}")
+        else:
+            patience_counter += 1
+            print(f"  no improv | patience {patience_counter}/5")
+            if patience_counter >= 5:
+                print(f"  early stop hard-neg")
+                break
+
+    print(f"\nhard-neg training done | best val acc {best_val_acc:.4f}")
+    return model
+
+
+def export_to_torchscript(model, num_classes):
+    checkpoint = torch.load(BEST_MODEL_PATH, map_location="cpu", weights_only=True)
+    model_cpu = timm.create_model(MODEL_NAME, pretrained=False, num_classes=num_classes)
+    model_cpu.load_state_dict(checkpoint["model_state_dict"])
+    model_cpu.eval()
+
+    dummy_input = torch.randn(1, 3, IMG_SIZE, IMG_SIZE)
+
+    traced_model = torch.jit.trace(model_cpu, dummy_input)
+    from torch.utils.mobile_optimizer import optimize_for_mobile
+    optimized = optimize_for_mobile(traced_model)
+    optimized._save_for_lite_interpreter(str(TORCHSCRIPT_MODEL_PATH))
+
+    with torch.no_grad():
+        pth_out = model_cpu(dummy_input)
+        ts_out = traced_model(dummy_input)
+        diff = (pth_out - ts_out).abs().max().item()
+
+    import os
+    file_mb = os.path.getsize(TORCHSCRIPT_MODEL_PATH) / (1024 * 1024)
+    print(f"torchscript exported ok -> {TORCHSCRIPT_MODEL_PATH}")
+    print(f"  file size       {file_mb:.2f} mb")
+    print(f"  max output diff {diff:.10f}")
+    print(f"  in [1 3 {IMG_SIZE} {IMG_SIZE}] | out [1 {num_classes}]")
+
+
 def export_to_onnx(model, num_classes):
     checkpoint = torch.load(BEST_MODEL_PATH, map_location=DEVICE, weights_only=True)
     model.load_state_dict(checkpoint["model_state_dict"])
@@ -619,7 +793,7 @@ def print_model_diagnostics(model, num_classes, label_map, metrics=None, tag="py
         model_size_mb = sum(p.nelement() * p.element_size() for p in model.parameters()) / (1024 * 1024)
         buffer_size_mb = sum(b.nelement() * b.element_size() for b in model.buffers()) / (1024 * 1024)
 
-        print(f"  arch            efficientnet_b0")
+        print(f"  arch            {MODEL_NAME}")
         print(f"  backend         timm")
         print(f"  device          {DEVICE}")
         print(f"  num classes     {num_classes}")
@@ -708,6 +882,8 @@ def main():
     parser.add_argument("--skip-training", action="store_true")
     parser.add_argument("--skip-export", action="store_true")
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--hard-neg-epochs", type=int, default=0)
+    parser.add_argument("--hard-neg-only", action="store_true")
     parser.add_argument("--demo-image", type=str, default=None)
     args = parser.parse_args()
 
@@ -763,6 +939,12 @@ def main():
             print(f"  no ckpt found -> training from scratch")
 
         model = train_model(model, train_loader, val_loader, num_classes, resume_ckpt=resume_ckpt)
+
+        if args.hard_neg_epochs > 0:
+            model = train_hard_negatives(
+                model, aug_df, val_loader, num_classes, label_map,
+                hard_neg_epochs=args.hard_neg_epochs
+            )
     else:
         print(f"\n[4/6] skip train")
         model = build_model(num_classes)
@@ -774,6 +956,15 @@ def main():
             num_workers=NUM_WORKERS,
             pin_memory=True,
         )
+
+        if args.hard_neg_only and BEST_MODEL_PATH.exists():
+            ckpt = torch.load(BEST_MODEL_PATH, map_location=DEVICE, weights_only=True)
+            model.load_state_dict(ckpt["model_state_dict"])
+            hn_epochs = args.hard_neg_epochs if args.hard_neg_epochs > 0 else HARD_NEG_EPOCHS
+            model = train_hard_negatives(
+                model, aug_df, val_loader, num_classes, label_map,
+                hard_neg_epochs=hn_epochs
+            )
 
     print(f"\n[5/6] model diagnostics")
     if BEST_MODEL_PATH.exists():
@@ -787,14 +978,16 @@ def main():
     print_model_diagnostics(model, num_classes, label_map_loaded, metrics=metrics, tag="pytorch")
 
     if not args.skip_export:
-        print(f"\n[6/6] onnx export")
+        print(f"\n[6/6] export models")
         if BEST_MODEL_PATH.exists():
             export_to_onnx(model, num_classes)
             print_model_diagnostics(model, num_classes, label_map_loaded, metrics=metrics, tag="onnx")
+            print(f"\n  exporting torchscript for android...")
+            export_to_torchscript(model, num_classes)
         else:
-            print(f"  no ckpt found -> skip onnx")
+            print(f"  no ckpt found -> skip export")
     else:
-        print(f"\n[6/6] skip onnx export")
+        print(f"\n[6/6] skip export")
 
     if args.demo_image:
         print(f"\ndemo infer -> {args.demo_image}")

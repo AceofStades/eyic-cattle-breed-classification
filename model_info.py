@@ -33,7 +33,9 @@ ONNX_MODEL_PATH = SCRIPT_DIR / "breed_classifier.onnx"
 LABEL_MAP_PATH = SCRIPT_DIR / "breed_labels.json"
 CSV_PATH = SCRIPT_DIR / "dataset" / "Indian_bovine_breeds" / "bovine_breeds_metadata.csv"
 GRAPHS_DIR = SCRIPT_DIR / "graphs"
-IMG_SIZE = 224
+IMG_SIZE = 260
+RESIZE_SIZE = 292
+MODEL_NAME = "efficientnet_b2"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
@@ -43,7 +45,7 @@ def load_label_map():
 
 
 def pytorch_info(model_path, num_classes):
-    model = timm.create_model("efficientnet_b0", pretrained=False, num_classes=num_classes)
+    model = timm.create_model(MODEL_NAME, pretrained=False, num_classes=num_classes)
     ckpt = torch.load(model_path, map_location="cpu", weights_only=True)
     model.load_state_dict(ckpt["model_state_dict"])
     model.eval()
@@ -60,7 +62,7 @@ def pytorch_info(model_path, num_classes):
     print(f"{'='*55}")
     print(f"  path            {model_path}")
     print(f"  file size       {file_mb:.2f} mb")
-    print(f"  arch            efficientnet_b0")
+    print(f"  arch            {MODEL_NAME}")
     print(f"  backend         timm")
     print(f"  num classes     {num_classes}")
     print(f"  input shape     [1 3 {IMG_SIZE} {IMG_SIZE}]")
@@ -192,7 +194,7 @@ def onnx_info(onnx_path, num_classes):
     print(f"  ort fwd test    ok | out shape {out[0].shape} | dtype {out[0].dtype}")
     print(f"  ort out range   [{out[0].min():.4f} {out[0].max():.4f}]")
 
-    pytorch_model = timm.create_model("efficientnet_b0", pretrained=False, num_classes=num_classes)
+    pytorch_model = timm.create_model(MODEL_NAME, pretrained=False, num_classes=num_classes)
     if os.path.exists(BEST_MODEL_PATH):
         ckpt = torch.load(BEST_MODEL_PATH, map_location="cpu", weights_only=True)
         pytorch_model.load_state_dict(ckpt["model_state_dict"])
@@ -224,7 +226,7 @@ def compare_models(num_classes):
 
     dummy = np.random.randn(1, 3, IMG_SIZE, IMG_SIZE).astype(np.float32)
 
-    pytorch_model = timm.create_model("efficientnet_b0", pretrained=False, num_classes=num_classes)
+    pytorch_model = timm.create_model(MODEL_NAME, pretrained=False, num_classes=num_classes)
     ckpt = torch.load(BEST_MODEL_PATH, map_location="cpu", weights_only=True)
     pytorch_model.load_state_dict(ckpt["model_state_dict"])
     pytorch_model.eval()
@@ -692,7 +694,7 @@ def _compute_eval_metrics(model, label_map, num_classes):
     val_df = val_df.reset_index(drop=True)
 
     val_transform = A.Compose([
-        A.Resize(256, 256),
+        A.Resize(RESIZE_SIZE, RESIZE_SIZE),
         A.CenterCrop(IMG_SIZE, IMG_SIZE),
         A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ToTensorV2(),
@@ -787,7 +789,7 @@ def main():
             comparison_data = compare_models(num_classes)
 
     if (args.graphs or args.graphs_only) and model is None and BEST_MODEL_PATH.exists():
-        model = timm.create_model("efficientnet_b0", pretrained=False, num_classes=num_classes)
+        model = timm.create_model(MODEL_NAME, pretrained=False, num_classes=num_classes)
         ckpt = torch.load(BEST_MODEL_PATH, map_location=DEVICE, weights_only=True)
         model.load_state_dict(ckpt["model_state_dict"])
         model.to(DEVICE)
