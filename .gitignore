@@ -3,9 +3,8 @@ _pycache_
 __pycache__
 
 old-dataset/
-*.onnx
-*.onnx.data
 *.pt
+*.pth
 export_models.py
 
 # Byte-compiled / optimized / DLL files

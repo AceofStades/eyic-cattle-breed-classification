@@ -501,7 +501,7 @@ def export_to_onnx(model, num_classes):
         dummy_input,
         str(ONNX_MODEL_PATH),
         export_params=True,
-        opset_version=13,
+        opset_version=18,
         do_constant_folding=True,
         input_names=["input"],
         output_names=["output"],
