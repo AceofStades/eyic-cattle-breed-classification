@@ -2,6 +2,7 @@ name: breed-classifier
 channels:
   - defaults
   - conda-forge
+  - pytorch
 dependencies:
   - python=3.12
   - pip
@@ -19,5 +20,9 @@ dependencies:
   - onnx
   - onnxruntime
   - streamlit
+  - pytorch
+  - torchvision
+  - torchaudio
   - pip:
       - timm
+      - ultralytics
